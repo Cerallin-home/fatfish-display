@@ -78,6 +78,7 @@ impl Backend for NullBackend {
 pub struct FbBackend {
     map: memmap2::MmapMut,
     stride_px: u32,
+    verbose: bool,
 }
 
 impl FbBackend {
@@ -95,7 +96,7 @@ impl FbBackend {
             .unwrap_or(960);
         let len = (stride as usize) * 320;
         let map = unsafe { memmap2::MmapOptions::new().len(len).map_mut(&f)? };
-        Ok(FbBackend { map, stride_px: stride / 2 })
+        Ok(FbBackend { map, stride_px: stride / 2, verbose: std::env::var("FF_DEBUG").is_ok() })
     }
 }
 
@@ -106,10 +107,23 @@ impl Backend for FbBackend {
         if cv.dirty_rows().is_empty() {
             return Ok(());
         }
-        let rows: Vec<(u32, u32)> = cv.dirty_rows().to_vec();
+        // 把脏行并成尽量少的连续块：相隔不到 GAP 行的两段合成一段一起写。
+        // fbtft 是 deferred IO，每 HZ/fps（这里 33ms）才把「被改过的页」推给屏一次，推的时候不认帧边界；
+        // 一帧拆成几十段小写，驱动很容易抓到「身体已是新的、尾巴还没写」的半帧，缝就落在右下角。
+        // 并成 1~2 段连续写之后，可能被采样的半帧窗口从整帧缩到只剩末尾一段。
+        const GAP: u32 = 24;
+        let mut spans: Vec<(u32, u32)> = Vec::new();
+        for &(a, b) in cv.dirty_rows() {
+            match spans.last_mut() {
+                Some(last) if a <= last.1 + GAP => last.1 = last.1.max(b),
+                _ => spans.push((a, b)),
+            }
+        }
         let buf = cv.back_buffer();
         let dst = &mut self.map[..];
-        for (a, b) in rows {
+        let mut sent_rows = 0u32;
+        for &(a, b) in &spans {
+            sent_rows += b - a;
             let s = (a * cv.w) as usize;
             let e = (b * cv.w) as usize;
             let bytes = unsafe {
@@ -120,6 +134,10 @@ impl Backend for FbBackend {
             if len > 0 {
                 dst[off..off + len].copy_from_slice(&bytes[..len]);
             }
+        }
+        // FF_DEBUG 时把每次送屏的段数打出来，用来确认脏行真的并成了 1~2 段
+        if self.verbose {
+            eprintln!("present: {} 段 {} 行 / 脏行 {} 段", spans.len(), sent_rows, cv.dirty_rows().len());
         }
         Ok(())
     }

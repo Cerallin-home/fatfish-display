@@ -16,9 +16,13 @@ use view::text::Fonts;
 use view::{Backend, FbBackend, NullBackend, PngBackend};
 use viewmodel::{ViewModel, H, W};
 
-/// 30fps 封顶：再快 SPI 也吃不下，纯属白烧 CPU
-const MAX_FPS: f32 = 30.0;
-const DEFAULT_FPS: f32 = 30.0;
+/// fbtft 的 deferred IO 节拍：delay = HZ/fps，本机 HZ=1000、overlay 里 fps=30，所以是 33ms 一次。
+/// 应用帧率对齐这个周期（1000/33 ≈ 30.3fps），写帧的相位才不会相对驱动慢慢漂移
+/// ——漂移的时候撕裂一会儿有一会儿没有，看着像是「有时候同步、有时候不同步」。
+const DRIVER_TICK_MS: f32 = 33.0;
+/// 上限留一点余量给对齐用；再往上 SPI 也吃不下，纯属白烧 CPU
+const MAX_FPS: f32 = 1000.0 / DRIVER_TICK_MS;
+const DEFAULT_FPS: f32 = 1000.0 / DRIVER_TICK_MS;
 
 
 /// 气泡接口：在 $XDG_RUNTIME_DIR/fatfish-display.sock 上听一句话，
@@ -153,6 +157,9 @@ fn main() {
     let prof = std::env::var("FF_PROF").is_ok();
     let (mut d_snap, mut d_draw, mut d_pres, mut d_over) = (0f64, 0f64, 0f64, 0f64);
     let mut first_render: Option<Instant> = None;
+    // 绝对时刻排程：每帧按 t0 + n*frame_dt 睡，不按「本帧耗时剩多少」睡，
+    // 否则渲染抖动会累积成帧周期漂移，和驱动 33ms 节拍越走越偏。
+    let mut next_at = Instant::now();
     loop {
         let started = Instant::now();
         let clock = now_clock();
@@ -163,9 +170,12 @@ fn main() {
             vm.say(text, false);
         }
         let Some(snap) = vm.snapshot(clock, t) else {
-            let spent = started.elapsed();
-            if spent < frame_dt {
-                std::thread::sleep(frame_dt - spent);
+            next_at += frame_dt;
+            let now = Instant::now();
+            if next_at > now {
+                std::thread::sleep(next_at - now);
+            } else {
+                next_at = now;
             }
             continue;
         };
@@ -193,8 +203,12 @@ fn main() {
         }
         let spent = started.elapsed();
         d_over += spent.as_secs_f64() - (d_snap + d_draw + d_pres).min(0.0) * 0.0;
-        if spent < frame_dt {
-            std::thread::sleep(frame_dt - spent);
+        next_at += frame_dt;
+        let now = Instant::now();
+        if next_at > now {
+            std::thread::sleep(next_at - now);
+        } else {
+            next_at = now;
         }
     }
     // 首帧前的等待（等采样线程第一次出数据）不算进帧率
