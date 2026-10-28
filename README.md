@@ -7,6 +7,21 @@
 - 后端：直接 mmap `/dev/fb0`，按脏行写 RGB565；不做 X / Wayland 依赖，开机 systemd user 服务拉起来就能显示
 - 说话接口：监听 `$XDG_RUNTIME_DIR/fatfish-display.sock`（可用 `FF_SAY_SOCK` 覆盖），收到一段文本就换气泡；配合 [dsh-display](https://github.com/Cerallin-home/dsh-display) 让 agent 传话
 
+## 指标配色
+
+四条进度条常态蓝（`#4A9EFF`），过警戒线转黄（`#FFC840`），过危险线转红（`#FF524A`）：
+
+| 指标 | 黄（警戒） | 红（危险） |
+| --- | --- | --- |
+| CPU | 70% | 90% |
+| 内存 | 75% | 90% |
+| 温度 | 60℃ | 70℃ |
+| 负载（每核） | 0.7 | 1.0 |
+
+负载用 load1 / 核心数折算成每核一条，和其他三条同一把尺子。温度到 60℃ 会同时触发立绘上方的告警气泡。
+
+阈值全是 `src/viewmodel/mod.rs` 顶上的常量（`CPU_WARN` / `CPU_CRIT` / `MEM_WARN` / `MEM_CRIT` / `TEMP_WARN` / `TEMP_CRIT` / `LOAD_WARN` / `LOAD_CRIT`），改完 `cargo build --release --offline` 重启服务即可。
+
 ## 跑起来
 
 ```bash
