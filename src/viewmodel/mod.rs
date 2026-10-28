@@ -214,8 +214,8 @@ const CPU_WARN: f32 = 70.0;
 const CPU_CRIT: f32 = 90.0;
 const MEM_WARN: f32 = 75.0;   // %
 const MEM_CRIT: f32 = 90.0;
-const TEMP_WARN: f32 = 65.0;  // ℃
-const TEMP_CRIT: f32 = 80.0;
+const TEMP_WARN: f32 = 60.0;  // ℃
+const TEMP_CRIT: f32 = 70.0;
 const LOAD_WARN: f32 = 0.7;   // load / 核心数
 const LOAD_CRIT: f32 = 1.0;
 
