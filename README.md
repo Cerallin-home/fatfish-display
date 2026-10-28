@@ -51,7 +51,8 @@ Restart=on-failure
 ```
 
 - 开关走独立 socket（`$XDG_RUNTIME_DIR/fatfish-display.ctl`，`FF_CTL_SOCK` 可覆盖），不和气泡口混用
-- 熄屏 = 整屏压成黑 + 停止刷新（帧率降到 5fps）。**不是关背光**：这块面板的背光直连 3.3V，overlay 里只有 reset / dc 两个 gpio，fbtft 也没实现 FBIOBLANK，软件关不掉。IPS 全黑时基本不漏光，但严格说是「不发光」，不是「断电」——真要断背光得飞线到 gpio
+- 熄屏 = 整屏压成黑 + 停止刷新（帧率降到 5fps）。**不是关背光**：这块面板的背光直连 3.3V，overlay 里只有 reset / dc 两个 gpio，fbtft 也没实现 FBIOBLANK，软件关不掉
+- **实测：黑屏之后背光还是亮的**，整个面板是一片均匀的灰白，房间里暗下来看很明显——这是「画面变黑」，不是「屏幕熄灭」。想要真关灯，只有两条路：给屏断电，或者把背光那一路飞线到 GPIO（见上面说的 3V3 + MOS）
 - 熄屏期间送进来的气泡一律丢掉，屏幕不会因为一句话自己亮起来
 - 状态落在 `$XDG_RUNTIME_DIR/fatfish-display.power`（`on` / `off`），脚本直接读这个文件，不用问进程
 

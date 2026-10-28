@@ -221,6 +221,7 @@ fn in_sleep_window(w: (u32, u32), now: u32) -> bool {
 /// 熄屏 = 把整屏压成黑，然后不再画。
 /// 这块面板的背光是硬件直连 3.3V 的（overlay 里只有 reset / dc 两个 gpio，没有背光引脚），
 /// 软件关不掉背光，fbtft 也没实现 FBIOBLANK；全黑之后再不出新帧，就是能做到的最好效果。
+/// 实测记一笔：黑屏之后背光还亮着，面板是一片均匀的灰白——这是「画面黑」，不是「灯灭」。
 fn present_black(cv: &mut Canvas, backend: &mut Box<dyn Backend>) {
     cv.clear(rgb565(0, 0, 0));
     if let Err(e) = backend.present(cv) {
