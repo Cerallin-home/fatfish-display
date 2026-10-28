@@ -179,8 +179,11 @@ impl Font {
 pub struct Fonts {
     pub mono13: Font,
     pub mono10: Font,
+    /// 只有左上角那块板子名用（2026-10-28：13px 在小屏上看不清，单独调到 15px）
+    pub mono15: Font,
     pub cjk13: Option<Font>,
     pub cjk10: Option<Font>,
+    pub cjk15: Option<Font>,
 }
 
 impl Fonts {
@@ -190,9 +193,11 @@ impl Fonts {
         let cjk = Font::open(CJK_FONT, CJK_INDEX);
         let fonts = Fonts {
             mono13: Font::at_size(mono.clone(), 13.0),
-            mono10: Font::at_size(mono, 10.0),
+            mono10: Font::at_size(mono.clone(), 10.0),
+            mono15: Font::at_size(mono, 15.0),
             cjk13: cjk.as_ref().map(|f| Font::at_size(f.clone(), 13.0)),
-            cjk10: cjk.map(|f| Font::at_size(f, 10.0)),
+            cjk10: cjk.as_ref().map(|f| Font::at_size(f.clone(), 10.0)),
+            cjk15: cjk.map(|f| Font::at_size(f, 15.0)),
         };
         Some(fonts)
     }
@@ -215,6 +220,15 @@ impl Fonts {
         }
     }
 
+    pub fn pick_big(&self, c: char) -> &Font {
+        let cjk = self.cjk15.as_ref();
+        match cjk {
+            Some(f) if (c as u32) >= 0x2E80 && f.has_glyph(c) => f,
+            Some(f) if !self.mono15.has_glyph(c) && f.has_glyph(c) => f,
+            _ => &self.mono15,
+        }
+    }
+
     pub fn advance(&self, c: char) -> i32 {
         self.pick(c).advance(c).max(0)
     }
@@ -228,6 +242,17 @@ impl Fonts {
         let mut cx = x;
         for c in text.chars() {
             let f = self.pick(c);
+            f.draw_base(cv, cx, baseline, &c.to_string(), color, 255);
+            cx += f.advance(c).max(0);
+        }
+        cx
+    }
+
+    /// 按基线中英混排（大一号，给板子名用）
+    pub fn draw_base_big(&self, cv: &mut Canvas, x: i32, baseline: i32, text: &str, color: Rgb565) -> i32 {
+        let mut cx = x;
+        for c in text.chars() {
+            let f = self.pick_big(c);
             f.draw_base(cv, cx, baseline, &c.to_string(), color, 255);
             cx += f.advance(c).max(0);
         }

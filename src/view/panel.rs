@@ -110,7 +110,7 @@ impl<'a> Panel<'a> {
         cv.fill_round_rect_aa_alpha(6, 6, PANEL_W as i32 - 12, H as i32 - 12, 10.0, PANEL, panel_alpha);
 
         // 标题 / 副标题 / 时钟：全部按基线对齐
-        self.fonts.draw_base(cv, 16, 28, &s.host_line, FG);
+        self.fonts.draw_base_big(cv, 16, 29, &s.host_line, FG);
         self.fonts.mono10.draw_base(cv, 16, 44, &s.sub_line, DIM, 255);
         let clock_w = self.fonts.width_mixed(&s.clock) as i32;
         self.fonts
