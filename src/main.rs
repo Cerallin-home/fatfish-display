@@ -10,7 +10,7 @@ mod viewmodel;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use view::canvas::Canvas;
+use view::canvas::{rgb565, Canvas};
 use view::panel::Panel;
 use view::text::Fonts;
 use view::{Backend, FbBackend, NullBackend, PngBackend};
@@ -62,6 +62,74 @@ fn say_socket_path() -> String {
     std::env::var("FF_SAY_SOCK").unwrap_or_else(|_| format!("{base}/fatfish-display.sock"))
 }
 
+/// 灯控接口：和气泡 socket 分开。熄屏指令混在说话通道里，早晚会被当成一句话说到屏上。
+/// 一行命令，处理完回一行结果，客户端关写端就知道说完了。
+fn ctl_socket_path() -> String {
+    let base = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/run/user/1000".to_string());
+    std::env::var("FF_CTL_SOCK").unwrap_or_else(|_| format!("{base}/fatfish-display.ctl"))
+}
+
+/// 熄屏状态落一个文件：外部脚本、插件都能直接看，不用问进程。
+fn power_state_path() -> String {
+    let base = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/run/user/1000".to_string());
+    format!("{base}/fatfish-display.power")
+}
+
+fn spawn_ctl_listener(
+    path: String,
+) -> std::sync::mpsc::Receiver<(String, std::sync::mpsc::Sender<String>)> {
+    let (tx, rx) = std::sync::mpsc::channel::<(String, std::sync::mpsc::Sender<String>)>();
+    std::thread::spawn(move || {
+        let _ = std::fs::remove_file(&path);
+        let listener = match std::os::unix::net::UnixListener::bind(&path) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("灯控接口没起来 {}: {e}", path);
+                return;
+            }
+        };
+        for conn in listener.incoming() {
+            let mut stream = match conn {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let mut buf = String::new();
+            use std::io::Read;
+            if stream.read_to_string(&mut buf).is_err() {
+                continue;
+            }
+            let cmd = buf.trim().to_string();
+            if cmd.is_empty() {
+                continue;
+            }
+            let (rtx, rrx) = std::sync::mpsc::channel::<String>();
+            if tx.send((cmd, rtx)).is_err() {
+                continue;
+            }
+            // 主循环那边最多一个渲染周期就轮到，2 秒没回就当作没听见
+            let reply = rrx
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap_or_else(|_| "err timeout".to_string());
+            use std::io::Write;
+            let _ = stream.write_all(reply.as_bytes());
+        }
+    });
+    rx
+}
+
+/// `fatfish-display ctl off|on|toggle|status`：不开屏、只发一行，给脚本和插件用。
+fn ctl_send(cmd: &str) -> std::io::Result<String> {
+    use std::io::{Read, Write};
+    let path = ctl_socket_path();
+    let mut stream = std::os::unix::net::UnixStream::connect(&path)?;
+    stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+    stream.write_all(cmd.as_bytes())?;
+    stream.shutdown(std::net::Shutdown::Write)?;
+    let mut out = String::new();
+    stream.read_to_string(&mut out)?;
+    Ok(out.trim().to_string())
+}
+
 /// 按驱动名找面板：插了 HDMI 之后 SPI 屏会从 fb0 退成 fb1，编号不能写死。
 fn detect_fb() -> Option<String> {
     let dir = std::fs::read_dir("/sys/class/graphics").ok()?;
@@ -105,12 +173,34 @@ fn now_clock() -> String {
     }
 }
 
+/// 熄屏 = 把整屏压成黑，然后不再画。
+/// 这块面板的背光是硬件直连 3.3V 的（overlay 里只有 reset / dc 两个 gpio，没有背光引脚），
+/// 软件关不掉背光，fbtft 也没实现 FBIOBLANK；全黑之后再不出新帧，就是能做到的最好效果。
+fn present_black(cv: &mut Canvas, backend: &mut Box<dyn Backend>) {
+    cv.clear(rgb565(0, 0, 0));
+    if let Err(e) = backend.present(cv) {
+        eprintln!("熄屏送屏失败: {e}");
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let backend_kind = args.get(1).map(|s| s.as_str()).unwrap_or("png");
     let frames: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(30);
     let asked: f32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(DEFAULT_FPS);
     let fps = if asked <= 0.0 { DEFAULT_FPS } else { asked.min(MAX_FPS) };
+    // 灯控客户端模式：只发一行命令、收一行结果，不建后端也不加载字模
+    if backend_kind == "ctl" {
+        let cmd = args.get(2).map(|s| s.as_str()).unwrap_or("status");
+        match ctl_send(cmd) {
+            Ok(reply) => println!("{reply}"),
+            Err(e) => {
+                eprintln!("连不上桌宠的灯控口 {}: {e}", ctl_socket_path());
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if asked > MAX_FPS {
         println!("帧率按 {:.0} fps 封顶（请求的是 {:.0}）", MAX_FPS, asked);
     }
@@ -187,6 +277,10 @@ fn main() {
     // 不然前两秒会站着再摔一跤（那时 dsh 根本没启动过，不该有摔倒动作）。
     let dsh_boot = model::sampler::probe_unit_active(&dsh_unit);
     let say_rx = spawn_say_listener(say_socket_path());
+    let ctl_rx = spawn_ctl_listener(ctl_socket_path());
+    let power_path = power_state_path();
+    let mut blanked = false;
+    let _ = std::fs::write(&power_path, "on");
 
     let frame_dt = Duration::from_secs_f32(1.0 / fps);
     let t0 = Instant::now();
@@ -225,6 +319,41 @@ fn main() {
         let m0 = Instant::now();
         while let Ok(text) = say_rx.try_recv() {
             vm.say(text, false);
+        }
+        // 灯控：熄屏/亮屏/查询，处理完回一行给客户端
+        while let Ok((cmd, reply)) = ctl_rx.try_recv() {
+            let ans = match cmd.trim().to_ascii_lowercase().as_str() {
+                "off" => {
+                    if !blanked {
+                        blanked = true;
+                        present_black(&mut cv, &mut backend);
+                    }
+                    "off".to_string()
+                }
+                "on" => {
+                    blanked = false;
+                    "on".to_string()
+                }
+                "toggle" => {
+                    blanked = !blanked;
+                    if blanked {
+                        present_black(&mut cv, &mut backend);
+                    }
+                    if blanked { "off".to_string() } else { "on".to_string() }
+                }
+                "status" => if blanked { "off".to_string() } else { "on".to_string() },
+                other => format!("err unknown {other}"),
+            };
+            let _ = std::fs::write(&power_path, if blanked { "off" } else { "on" });
+            let _ = reply.send(ans);
+        }
+        if blanked {
+            // 熄屏之后只剩听令：不采样、不画、不送屏，帧率降到 5fps。
+            // 这时候进来的气泡也丢掉——夜里屏幕不该因为一句播报再亮起来。
+            while say_rx.try_recv().is_ok() {}
+            std::thread::sleep(Duration::from_millis(200));
+            next_at = Instant::now();
+            continue;
         }
         let Some(snap) = vm.snapshot(clock, t) else {
             next_at += frame_dt;

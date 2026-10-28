@@ -40,6 +40,21 @@ ExecStart=/home/julia/fatfish/display-rs/target/release/fatfish-display fb 0 30
 Restart=on-failure
 ```
 
+## 熄屏
+
+晚上不想屏幕亮着：
+
+```bash
+./target/release/fatfish-display ctl off     # 熄屏
+./target/release/fatfish-display ctl on      # 亮屏
+./target/release/fatfish-display ctl status
+```
+
+- 开关走独立 socket（`$XDG_RUNTIME_DIR/fatfish-display.ctl`，`FF_CTL_SOCK` 可覆盖），不和气泡口混用
+- 熄屏 = 整屏压成黑 + 停止刷新（帧率降到 5fps）。**不是关背光**：这块面板的背光直连 3.3V，overlay 里只有 reset / dc 两个 gpio，fbtft 也没实现 FBIOBLANK，软件关不掉。IPS 全黑时基本不漏光，但严格说是「不发光」，不是「断电」——真要断背光得飞线到 gpio
+- 熄屏期间送进来的气泡一律丢掉，屏幕不会因为一句话自己亮起来
+- 状态落在 `$XDG_RUNTIME_DIR/fatfish-display.power`（`on` / `off`），脚本直接读这个文件，不用问进程
+
 ## 面板朝向
 
 面板本身歪着装的时候改 overlay，不要在软件里翻：
