@@ -105,7 +105,7 @@ impl<'a> Panel<'a> {
             Some(bg) => cv.copy_from(bg),
             None => cv.clear(BG),
         }
-        cv.fill_round_rect(6, 6, PANEL_W as i32 - 12, H as i32 - 12, 10, PANEL);
+        cv.fill_round_rect_aa(6, 6, PANEL_W as i32 - 12, H as i32 - 12, 10.0, PANEL);
 
         // 标题 / 副标题 / 时钟：全部按基线对齐
         self.fonts.draw_base(cv, 16, 28, &s.host_line, FG);
