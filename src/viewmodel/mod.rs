@@ -206,7 +206,29 @@ pub struct ViewModel {
 }
 
 const ACCENT: [u8; 3] = [74, 158, 255];
-const WARN: [u8; 3] = [255, 138, 76];
+const CAUTION: [u8; 3] = [255, 200, 64];   // 黄：过警戒线
+const DANGER: [u8; 3] = [255, 82, 74];     // 红：过危险线
+
+/// 每一项指标的 (黄线, 红线)，单位就是它自己显示的刻度
+const CPU_WARN: f32 = 70.0;
+const CPU_CRIT: f32 = 90.0;
+const MEM_WARN: f32 = 75.0;   // %
+const MEM_CRIT: f32 = 90.0;
+const TEMP_WARN: f32 = 65.0;  // ℃
+const TEMP_CRIT: f32 = 80.0;
+const LOAD_WARN: f32 = 0.7;   // load / 核心数
+const LOAD_CRIT: f32 = 1.0;
+
+/// 三档配色：常态蓝，过黄线黄，过红线红
+fn level_color(v: f32, warn: f32, crit: f32) -> [u8; 3] {
+    if v >= crit {
+        DANGER
+    } else if v >= warn {
+        CAUTION
+    } else {
+        ACCENT
+    }
+}
 
 impl ViewModel {
     pub fn new(rx: Receiver<SystemState>) -> Self {
@@ -289,30 +311,42 @@ impl ViewModel {
         self.drain();
         self.tick += 1;
         let st = self.latest.clone()?;
-        let temp_warn = st.cpu_temp_c >= 65.0;
+        let temp_warn = st.cpu_temp_c >= TEMP_WARN;
         let any_bad = st.services.iter().any(|s| !s.ok);
+        let mem_ratio = if st.mem_total_gb > 0.0 {
+            st.mem_used_gb / st.mem_total_gb
+        } else {
+            0.0
+        };
+        let load_ratio = st.load1 / st.cores.max(1) as f32;
         let bars = vec![
-            Bar { label: "CPU", value: format!("{:.0}", st.cpu_pct), unit: "%", ratio: st.cpu_pct / 100.0, color: ACCENT },
+            Bar {
+                label: "CPU",
+                value: format!("{:.0}", st.cpu_pct),
+                unit: "%",
+                ratio: st.cpu_pct / 100.0,
+                color: level_color(st.cpu_pct, CPU_WARN, CPU_CRIT),
+            },
             Bar {
                 label: "内存",
                 value: format!("{:.1}/{:.1}G", st.mem_used_gb, st.mem_total_gb),
                 unit: "",
-                ratio: if st.mem_total_gb > 0.0 { st.mem_used_gb / st.mem_total_gb } else { 0.0 },
-                color: ACCENT,
+                ratio: mem_ratio,
+                color: level_color(mem_ratio * 100.0, MEM_WARN, MEM_CRIT),
             },
             Bar {
                 label: "温度",
                 value: format!("{:.0}", st.cpu_temp_c),
                 unit: "℃",
                 ratio: st.cpu_temp_c / 85.0,
-                color: if temp_warn { WARN } else { ACCENT },
+                color: level_color(st.cpu_temp_c, TEMP_WARN, TEMP_CRIT),
             },
             Bar {
                 label: "负载",
                 value: format!("{:.2}", st.load1),
                 unit: "",
-                ratio: (st.load1 / st.cores.max(1) as f32).min(1.0),
-                color: ACCENT,
+                ratio: load_ratio.min(1.0),
+                color: level_color(load_ratio, LOAD_WARN, LOAD_CRIT),
             },
         ];
         // 警报气泡：没人说话时，每 30 秒最多冒一次
