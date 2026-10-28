@@ -1,0 +1,17 @@
+[package]
+name = "fatfish-display"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+image = { version = "0.24.9", default-features = false, features = ["png"] }
+memmap2 = "0.9"
+serde_json = "1.0"
+libc = "0.2"
+ab_glyph = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

@@ -1,0 +1,1 @@
+{"tile_w": 245, "tile_h": 226, "cols": 45, "rows": 1, "phases": 45, "blinks": [0.0, 1.0], "mouths": [0.15, 0.5, 0.9, 1.0], "phase_speed": 0.6666667, "blink_patch": {"w": 97, "h": 46, "x": 56, "y": 94, "cols": 45}, "mouth_patch": {"w": 29, "h": 24, "x": 89, "y": 126, "cols": 45, "rows": 4}}
