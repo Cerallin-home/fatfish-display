@@ -3,6 +3,7 @@ pub mod canvas;
 pub mod panel;
 pub mod sprites;
 pub mod text;
+pub mod video;
 
 use std::path::Path;
 

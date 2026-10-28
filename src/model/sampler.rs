@@ -149,9 +149,30 @@ fn port_open(port: u16) -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
 }
 
+/// 启动时同步探一次：开机阶段面板可能比 dsh 先起来，得立刻知道该站着还是躺着。
+/// 返回 None 表示压根没探成（systemctl 都跑不起来），这时候别乱下结论。
+pub fn probe_unit_active(unit: &str) -> Option<bool> {
+    let out = Command::new("systemctl").arg("--user").arg("is-active").arg(unit).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    Some(text.lines().next().map(|l| l.trim() == "active").unwrap_or(false))
+}
+
 /// 一次 systemctl 拿全部 unit 状态，别为每个服务 fork 一次
 fn service_states() -> Vec<ServiceState> {
-    let units: Vec<&str> = SERVICES.iter().map(|(_, u)| *u).filter(|u| !u.is_empty()).collect();
+    // dsh 的 unit 允许用 FF_DSH_UNIT 换掉（测试拿别的 unit 模拟挂掉/恢复）
+    let dsh_unit = std::env::var("FF_DSH_UNIT").unwrap_or_else(|_| "dsh-qqbot.service".to_string());
+    let unit_of = |label: &str, unit: &str| -> String {
+        if label == "dsh" {
+            dsh_unit.clone()
+        } else {
+            unit.to_string()
+        }
+    };
+    let units: Vec<String> = SERVICES
+        .iter()
+        .map(|(l, u)| unit_of(l, u))
+        .filter(|u| !u.is_empty())
+        .collect();
     let mut states: Vec<String> = Vec::new();
     if !units.is_empty() {
         if let Ok(out) = Command::new("systemctl").arg("--user").arg("is-active").args(&units).output() {
@@ -165,6 +186,7 @@ fn service_states() -> Vec<ServiceState> {
     SERVICES
         .iter()
         .map(|(label, unit)| {
+            let unit = &unit_of(label, unit);
             let ok = if unit.is_empty() {
                 port_open(GLANCES_PORT)
             } else {

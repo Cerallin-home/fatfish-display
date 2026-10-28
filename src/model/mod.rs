@@ -1,4 +1,5 @@
 //! Model 层：只负责“事实”，不关心怎么画。
+pub mod health;
 pub mod sampler;
 
 use std::time::Instant;

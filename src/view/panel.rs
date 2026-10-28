@@ -4,6 +4,7 @@ use crate::viewmodel::{BubbleVis, Snapshot, H, PANEL_W, W};
 use super::canvas::{rgb565, Canvas, Rgb565};
 use super::sprites::Sprites;
 use super::text::{Fonts, DIM, FG};
+use super::video::Clip;
 
 const BG: Rgb565 = rgb565(14, 18, 32);
 const PANEL: Rgb565 = rgb565(26, 32, 52);
@@ -76,7 +77,7 @@ impl<'a> Panel<'a> {
 }
 
 impl<'a> Panel<'a> {
-    pub fn draw(&mut self, cv: &mut Canvas, s: &Snapshot) {
+    pub fn draw(&mut self, cv: &mut Canvas, s: &Snapshot, down: Option<(&Clip, f32)>) {
         let key = Self::static_key(s);
         let fresh = std::env::var_os("FF_NOCACHE").is_some() || match &self.cache {
             Some((k, _)) => k != &key,
@@ -90,6 +91,11 @@ impl<'a> Panel<'a> {
         let (_, buf) = self.cache.as_ref().unwrap();
         cv.copy_from(buf);
         draw_bubbles(cv, &s.bubbles);
+        if let Some((clip, t)) = down {
+            // DSH 挂了：立绘让位给躺倒的帧序列，帧自带 alpha，面板和背景照旧露着
+            clip.blit(cv, clip.frame_at(t));
+            return;
+        }
         if let Some(sp) = self.sprites {
             let x0 = PANEL_W as i32 + (W as i32 - PANEL_W as i32 - sp.tile_w as i32) / 2;
             let y0 = H as i32 - sp.tile_h as i32 + 14;

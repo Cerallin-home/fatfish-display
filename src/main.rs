@@ -163,6 +163,29 @@ fn main() {
     }
     let bg = view::panel::load_bg(asset_dir.to_str().unwrap_or(""));
     let mut panel = Panel::new(&fonts, sprites.as_ref(), bg);
+    // DSH 挂掉 / 恢复的两段：文件不在就当作没有，照常显示面板
+    let down_clip = view::video::Clip::load(
+        asset_dir.join("states/dsh_down.clip").to_str().unwrap_or(""),
+    );
+    let up_clip = view::video::Clip::load(
+        asset_dir.join("states/dsh_up.clip").to_str().unwrap_or(""),
+    );
+    if down_clip.is_none() {
+        eprintln!("没找到 states/dsh_down.clip，躺倒动画不可用");
+    }
+    if up_clip.is_none() {
+        eprintln!("没找到 states/dsh_up.clip，起身动画不可用");
+    }
+    // 预览用：FF_DOWN_AT / FF_UP_AT 指定第几秒挂、第几秒恢复；各触发一次
+    let mut down_at: Option<f64> = std::env::var("FF_DOWN_AT").ok().and_then(|s| s.parse().ok());
+    let mut up_at: Option<f64> = std::env::var("FF_UP_AT").ok().and_then(|s| s.parse().ok());
+    // 真实触发源：采样线程每秒报的 dsh unit 状态，连续几次一致才认
+    let dsh_need: u32 = std::env::var("FF_DSH_NEED").ok().and_then(|s| s.parse().ok()).unwrap_or(2);
+    let dsh_unit = std::env::var("FF_DSH_UNIT").unwrap_or_else(|_| "dsh-qqbot.service".to_string());
+    let mut dsh_watch = model::health::Watcher::new(dsh_need);
+    // 开机时面板往往比 dsh 先起来：先同步探一发，没在跑就直接躺好，
+    // 不然前两秒会站着再摔一跤（那时 dsh 根本没启动过，不该有摔倒动作）。
+    let dsh_boot = model::sampler::probe_unit_active(&dsh_unit);
     let say_rx = spawn_say_listener(say_socket_path());
 
     let frame_dt = Duration::from_secs_f32(1.0 / fps);
@@ -176,6 +199,23 @@ fn main() {
     let mut next_at = Instant::now();
     // 上一条气泡的文案，用来认出「换了一条」这件事
     let mut last_bubble: Option<String> = None;
+    // 挂掉动画的四个阶段；计时都用 t0 起算的相对秒
+    enum Phase {
+        Normal,
+        Falling(f64),
+        Down,
+        Rising(f64),
+    }
+    // 起来的时候 dsh 就没在跑：直接躺着，不补一遍摔倒动画
+    let mut phase = Phase::Normal;
+    if dsh_boot == Some(false) && down_clip.is_some() {
+        phase = Phase::Down;
+    }
+    if let Some(alive) = dsh_boot {
+        use model::health::Health;
+        dsh_watch.seed(if alive { Health::Up } else { Health::Down });
+    }
+    let mut pending_up = false;
     let bubble_path = bubble_state_path();
     loop {
         let started = Instant::now();
@@ -212,7 +252,73 @@ fn main() {
                 }
                 last_bubble = cur_bubble;
             }
-            panel.draw(&mut cv, &snap);
+            // 状态机：正常 -> 倒下 -> 躺着 -> 起身 -> 正常
+            // 触发源就是 dsh 服务本身：不可用就摔，可用就爬回来
+            let dsh_alive = snap.services.iter().find(|(n, _)| n == "dsh").map(|(_, ok)| *ok);
+            if let Some(alive) = dsh_alive {
+                if let Some(ev) = dsh_watch.feed(alive) {
+                    use model::health::{Event, Health};
+                    match ev {
+                        // 启动时就没跑：直接躺着
+                        Event::First(Health::Down) if down_clip.is_some() => phase = Phase::Down,
+                        Event::First(_) => {}
+                        Event::Flip(Health::Down) => {
+                            if matches!(phase, Phase::Normal) && down_clip.is_some() {
+                                phase = Phase::Falling(t);
+                            }
+                        }
+                        Event::Flip(Health::Up) => match phase {
+                            // 正摔到一半就恢复了：等这一跤摔完再起
+                            Phase::Falling(_) => pending_up = true,
+                            Phase::Down if up_clip.is_some() => phase = Phase::Rising(t),
+                            _ => {}
+                        },
+                    }
+                }
+            }
+            if matches!(phase, Phase::Normal) {
+                if let (Some(at), Some(_)) = (down_at, down_clip.as_ref()) {
+                    if t >= at {
+                        phase = Phase::Falling(t);
+                        down_at = None;
+                    }
+                }
+            }
+            if let Some(at) = up_at {
+                if t >= at && matches!(phase, Phase::Falling(_) | Phase::Down) {
+                    phase = Phase::Rising(t);
+                    up_at = None;
+                }
+            }
+            match phase {
+                Phase::Falling(s) => {
+                    if let Some(c) = down_clip.as_ref() {
+                        if (t - s) as f32 >= c.duration() {
+                            phase = if pending_up && up_clip.is_some() {
+                                pending_up = false;
+                                Phase::Rising(t)
+                            } else {
+                                Phase::Down
+                            };
+                        }
+                    }
+                }
+                Phase::Rising(s) => {
+                    if let Some(c) = up_clip.as_ref() {
+                        if (t - s) as f32 >= c.duration() {
+                            phase = Phase::Normal;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            let overlay = match phase {
+                Phase::Normal => None,
+                Phase::Falling(s) => down_clip.as_ref().map(|c| (c, (t - s) as f32)),
+                Phase::Down => down_clip.as_ref().map(|c| (c, c.duration())),
+                Phase::Rising(s) => up_clip.as_ref().map(|c| (c, (t - s) as f32)),
+            };
+            panel.draw(&mut cv, &snap, overlay);
             let m2 = Instant::now();
             d_snap += (m1 - m0).as_secs_f64();
             d_draw += (m2 - m1).as_secs_f64();
