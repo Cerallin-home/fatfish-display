@@ -113,7 +113,7 @@ impl Sprites {
         }
         if blink > 0 {
             if let Some(p) = &self.blink {
-                p.blit(cv, col, 0, x0 + p.ox as i32, y0 + p.oy as i32);
+                p.blit(cv, col, blink.saturating_sub(1) as u32, x0 + p.ox as i32, y0 + p.oy as i32);
             }
         }
         if mouth > 0 {
