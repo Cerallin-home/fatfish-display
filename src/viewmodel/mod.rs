@@ -55,18 +55,12 @@ const PHASES: u32 = 45;
 const PHASE_SPEED: f64 = 30.0 / 45.0;   // 30fps 下每帧正好推进一个相位，一轮 1.5s
 const BLINK_PERIOD: f64 = 4.2;
 
-/// 眨眼档位：0=睁 1=半睁 2=闭。
-/// 以前是 0→1 硬跳，现在补了半睁那一帧：睁 → 半睁 → 闭 → 半睁 → 睁，一轮 0.28 秒。
-fn blink_level(t: f64) -> usize {
+fn blink_amount(t: f64) -> f64 {
     let p = (t + 2.1) % BLINK_PERIOD;
-    if p < 0.10 {
-        1
-    } else if p < 0.18 {
-        2
-    } else if p < 0.28 {
-        1
+    if p < 0.16 {
+        1.0
     } else {
-        0
+        0.0
     }
 }
 
@@ -232,7 +226,7 @@ impl ViewModel {
     pub fn anim(&self, t: f64, talking: bool) -> AnimFrame {
         AnimFrame {
             phase: ((t * PHASE_SPEED * PHASES as f64) as u32) % PHASES,
-            blink: blink_level(t),
+            blink: if blink_amount(t) > 0.5 { 1 } else { 0 },
             mouth: mouth_level(t, talking, self.happy),
         }
     }
