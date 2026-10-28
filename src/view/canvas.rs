@@ -103,6 +103,20 @@ impl Canvas {
 
     /// 抗锯齿圆角矩形：r 可以给到 h/2，两端就是完整的半圆（药丸形）
     pub fn fill_round_rect_aa(&mut self, x: i32, y: i32, w: i32, h: i32, r: f32, c: Rgb565) {
+        self.fill_round_rect_aa_alpha(x, y, w, h, r, c, 255);
+    }
+
+    /// 同上，但整体带一个 alpha（面板压在背景图上时用来透出一点海）
+    pub fn fill_round_rect_aa_alpha(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        r: f32,
+        c: Rgb565,
+        alpha: u8,
+    ) {
         if w <= 0 || h <= 0 {
             return;
         }
@@ -125,7 +139,7 @@ impl Canvas {
                 };
                 let cov = (0.5 - d).clamp(0.0, 1.0);
                 if cov > 0.0 {
-                    self.blend(xx, yy, c, (cov * 255.0).round() as u8);
+                    self.blend(xx, yy, c, (cov * alpha as f32).round() as u8);
                 }
             }
         }

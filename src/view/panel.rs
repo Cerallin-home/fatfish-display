@@ -105,7 +105,9 @@ impl<'a> Panel<'a> {
             Some(bg) => cv.copy_from(bg),
             None => cv.clear(BG),
         }
-        cv.fill_round_rect_aa(6, 6, PANEL_W as i32 - 12, H as i32 - 12, 10.0, PANEL);
+        // 面板带一点点透明度，让海水的光从底下透出来
+        let panel_alpha = if self.bg.is_some() { 204 } else { 255 };
+        cv.fill_round_rect_aa_alpha(6, 6, PANEL_W as i32 - 12, H as i32 - 12, 10.0, PANEL, panel_alpha);
 
         // 标题 / 副标题 / 时钟：全部按基线对齐
         self.fonts.draw_base(cv, 16, 28, &s.host_line, FG);
