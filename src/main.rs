@@ -8,7 +8,7 @@ mod view;
 mod viewmodel;
 
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use view::canvas::Canvas;
 use view::panel::Panel;
@@ -76,6 +76,20 @@ fn detect_fb() -> Option<String> {
         }
     }
     None
+}
+
+/// 气泡状态文件：写下「当前这条气泡什么时候放完」，播报方据此算「上一条放完后再等几秒」。
+/// 用文件而不是回 socket，是因为 socket 那头写完就关，没有应答通道。
+fn bubble_state_path() -> String {
+    let base = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/run/user/1000".to_string());
+    format!("{base}/fatfish-display.bubble")
+}
+
+fn now_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
 }
 
 /// 取本地时:分。别每帧 fork 一个 date，那要 2~3ms，直接 localtime_r。
@@ -160,6 +174,9 @@ fn main() {
     // 绝对时刻排程：每帧按 t0 + n*frame_dt 睡，不按「本帧耗时剩多少」睡，
     // 否则渲染抖动会累积成帧周期漂移，和驱动 33ms 节拍越走越偏。
     let mut next_at = Instant::now();
+    // 上一条气泡的文案，用来认出「换了一条」这件事
+    let mut last_bubble: Option<String> = None;
+    let bubble_path = bubble_state_path();
     loop {
         let started = Instant::now();
         let clock = now_clock();
@@ -183,6 +200,17 @@ fn main() {
         {
             if dbg {
                 eprintln!("t={:.2} phase={} blink={} mouth={}", t, snap.anim.phase, snap.anim.blink, snap.anim.mouth);
+            }
+            // 气泡开头/结尾各写一次状态文件，播报方不用猜动画多长
+            let cur_bubble = snap.bubble.as_ref().map(|b| b.text.clone());
+            if cur_bubble != last_bubble {
+                if cur_bubble.is_some() {
+                    let end = now_ms() + (viewmodel::BUB_LIFETIME * 1000.0) as u128;
+                    let _ = std::fs::write(&bubble_path, end.to_string());
+                } else {
+                    let _ = std::fs::remove_file(&bubble_path);
+                }
+                last_bubble = cur_bubble;
             }
             panel.draw(&mut cv, &snap);
             let m2 = Instant::now();

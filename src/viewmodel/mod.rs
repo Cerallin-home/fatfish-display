@@ -143,6 +143,10 @@ const BUB_BOUNCES: usize = 3;
 /// 最后上浮 + 淡出
 const BUB_FLOAT: f64 = 1.30;
 const BUB_RISE: f32 = 40.0;
+/// 一条气泡从出现到彻底消失的总时长（秒）。给外面报「这条什么时候放完」用，
+/// 改下面那几个常量时它会跟着变，别单独改这个数。
+pub const BUB_LIFETIME: f64 =
+    BUB_HOLD + (BUB_STEP + BUB_PAUSE_TOP + BUB_STEP + BUB_PAUSE) * BUB_BOUNCES as f64 + BUB_FLOAT;
 const BUB_AMP: f32 = 2.0;
 
 fn ease_out(p: f32) -> f32 {
