@@ -173,6 +173,51 @@ fn now_clock() -> String {
     }
 }
 
+/// 夜间熄屏窗口，形如 "23:40-08:00"（跨零点也认）。FF_SLEEP=off 关掉自动。
+const DEFAULT_SLEEP_WINDOW: &str = "23:40-08:00";
+/// 夜里手动亮屏后给多少秒看：到点自己黑回去，不用惦记着再关
+const NIGHT_WAKE_SECS: u64 = 600;
+
+fn parse_hhmm(s: &str) -> Option<u32> {
+    let (h, m) = s.trim().split_once(':')?;
+    let h: u32 = h.trim().parse().ok()?;
+    let m: u32 = m.trim().parse().ok()?;
+    if h > 23 || m > 59 {
+        return None;
+    }
+    Some(h * 60 + m)
+}
+
+fn parse_window(spec: &str) -> Option<(u32, u32)> {
+    let (a, b) = spec.split_once('-')?;
+    Some((parse_hhmm(a)?, parse_hhmm(b)?))
+}
+
+/// 取本地「今天第几分钟」。和 now_clock 一样用 localtime_r，不 fork date。
+fn now_minutes() -> u32 {
+    unsafe {
+        let mut t: libc::time_t = 0;
+        libc::time(&mut t);
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&t, &mut tm).is_null() {
+            return 0;
+        }
+        (tm.tm_hour as u32) * 60 + tm.tm_min as u32
+    }
+}
+
+/// 落在窗口里没有：开始 < 结束是同一天，开始 > 结束是跨零点
+fn in_sleep_window(w: (u32, u32), now: u32) -> bool {
+    if w.0 == w.1 {
+        return false;
+    }
+    if w.0 < w.1 {
+        now >= w.0 && now < w.1
+    } else {
+        now >= w.0 || now < w.1
+    }
+}
+
 /// 熄屏 = 把整屏压成黑，然后不再画。
 /// 这块面板的背光是硬件直连 3.3V 的（overlay 里只有 reset / dc 两个 gpio，没有背光引脚），
 /// 软件关不掉背光，fbtft 也没实现 FBIOBLANK；全黑之后再不出新帧，就是能做到的最好效果。
@@ -281,6 +326,24 @@ fn main() {
     let power_path = power_state_path();
     let mut blanked = false;
     let _ = std::fs::write(&power_path, "on");
+    // 夜间窗口：22:00 到 08:00 之间自动熄屏，到点自己亮回来
+    let sleep_spec = std::env::var("FF_SLEEP").unwrap_or_else(|_| DEFAULT_SLEEP_WINDOW.to_string());
+    let sleep_win = match sleep_spec.trim().to_ascii_lowercase().as_str() {
+        "" | "off" | "none" => None,
+        s => match parse_window(s) {
+            Some(w) => Some(w),
+            None => {
+                eprintln!("FF_SLEEP 认不出来（{s}），按 23:40-08:00 走");
+                parse_window(DEFAULT_SLEEP_WINDOW)
+            }
+        },
+    };
+    if let Some(w) = sleep_win {
+        println!("夜间熄屏 {:02}:{:02}-{:02}:{:02}", w.0 / 60, w.0 % 60, w.1 / 60, w.1 % 60);
+    }
+    let mut prev_in_window = false;
+    let mut wake_until: Option<Instant> = None;
+    let mut last_win_check = Instant::now() - Duration::from_secs(5);
 
     let frame_dt = Duration::from_secs_f32(1.0 / fps);
     let t0 = Instant::now();
@@ -332,6 +395,12 @@ fn main() {
                 }
                 "on" => {
                     blanked = false;
+                    // 夜里手动点亮：给 10 分钟，到点自己黑回去，省得惦记
+                    if let Some(w) = sleep_win {
+                        if in_sleep_window(w, now_minutes()) {
+                            wake_until = Some(Instant::now());
+                        }
+                    }
                     "on".to_string()
                 }
                 "toggle" => {
@@ -346,6 +415,26 @@ fn main() {
             };
             let _ = std::fs::write(&power_path, if blanked { "off" } else { "on" });
             let _ = reply.send(ans);
+        }
+        // 夜间窗口：每秒对一次表。进窗口强制熄，出窗口强制亮；
+        // 手动熄的不受「出窗口」影响（白天自己关的就一直关着）。
+        if let Some(w) = sleep_win {
+            if last_win_check.elapsed() >= Duration::from_secs(1) {
+                last_win_check = Instant::now();
+                let in_now = in_sleep_window(w, now_minutes());
+                let exempt = wake_until
+                    .map(|t| t.elapsed() < Duration::from_secs(NIGHT_WAKE_SECS))
+                    .unwrap_or(false);
+                if in_now && !exempt && !blanked {
+                    blanked = true;
+                    present_black(&mut cv, &mut backend);
+                    let _ = std::fs::write(&power_path, "off");
+                } else if !in_now && prev_in_window && blanked {
+                    blanked = false;
+                    let _ = std::fs::write(&power_path, "on");
+                }
+                prev_in_window = in_now;
+            }
         }
         if blanked {
             // 熄屏之后只剩听令：不采样、不画、不送屏，帧率降到 5fps。

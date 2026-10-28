@@ -55,6 +55,19 @@ Restart=on-failure
 - 熄屏期间送进来的气泡一律丢掉，屏幕不会因为一句话自己亮起来
 - 状态落在 `$XDG_RUNTIME_DIR/fatfish-display.power`（`on` / `off`），脚本直接读这个文件，不用问进程
 
+### 夜间自动熄屏
+
+默认每天 **23:40 - 次日 08:00** 自动黑屏，出窗口自己亮回来。窗口写在 `src/main.rs` 的 `DEFAULT_SLEEP_WINDOW`，也能用环境变量覆盖：
+
+```bash
+FF_SLEEP=22:30-07:00 ./target/release/fatfish-display fb 0 30.3
+FF_SLEEP=off ./target/release/fatfish-display fb 0 30.3   # 关掉自动
+```
+
+- 进窗口强制熄，出窗口强制亮；白天手动熄的不受影响（照旧黑着，不会被硬点亮）
+- 夜里想看一眼：`ctl on` 给 10 分钟，到点自己黑回去（`NIGHT_WAKE_SECS`）
+- 窗口每秒对一次表，用 `localtime_r`，不 fork `date`
+
 ## 面板朝向
 
 面板本身歪着装的时候改 overlay，不要在软件里翻：
