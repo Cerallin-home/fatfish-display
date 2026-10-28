@@ -143,7 +143,8 @@ fn main() {
     if sprites.is_none() {
         eprintln!("警告：立绘图集缺失，先只画面板");
     }
-    let mut panel = Panel::new(&fonts, sprites.as_ref());
+    let bg = view::panel::load_bg(asset_dir.to_str().unwrap_or(""));
+    let mut panel = Panel::new(&fonts, sprites.as_ref(), bg);
     let say_rx = spawn_say_listener(say_socket_path());
 
     let frame_dt = Duration::from_secs_f32(1.0 / fps);

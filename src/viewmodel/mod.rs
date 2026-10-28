@@ -30,6 +30,17 @@ pub struct Snapshot {
     pub tick: u64,
     pub stale_ms: u128,
     pub anim: AnimFrame,
+    /// 背景里往上飘的小气泡（画在立绘后面）
+    pub bubbles: Vec<BubbleUp>,
+}
+
+/// 一颗上浮的小气泡：位置、半径、透明度都在这里算好，view 只管画
+#[derive(Clone, Copy, Debug)]
+pub struct BubbleUp {
+    pub x: i32,
+    pub y: i32,
+    pub r: i32,
+    pub alpha: u8,
 }
 
 /// 动画状态：只暴露“第几帧”，不暴露表情细节
@@ -238,6 +249,37 @@ impl ViewModel {
         }
     }
 
+    /// 背景气泡：全部由时间戳推出，不存状态，跳帧也不会错位。
+    fn background_bubbles(&self, t: f64) -> Vec<BubbleUp> {
+        const COUNT: usize = 22;
+        let mut out = Vec::with_capacity(COUNT);
+        let left = PANEL_W as f64 + 6.0;
+        let right = W as f64 - 14.0;
+        let span = H as f64 + 30.0;
+        for i in 0..COUNT {
+            let seed = (i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            let fx = ((seed >> 11) & 0xffff) as f64 / 65535.0;
+            let fs = ((seed >> 31) & 0xff) as f64 / 255.0;
+            let fp = ((seed >> 47) & 0xffff) as f64 / 65535.0;
+            let fr = ((seed >> 59) & 0x1f) as f64 / 31.0;
+            let speed = 11.0 + fs * 20.0;                 // px/s，慢慢来
+            let r = 1.6 + fr * 2.8;
+            let x0 = left + fx * (right - left);
+            let yy = span - ((t * speed + fp * span) % span);
+            // 越往上越淡，别糊在标题上
+            let fade = if yy < 46.0 { (yy / 46.0).clamp(0.0, 1.0) as f32 } else { 1.0 };
+            let alpha = (200.0 * fade) as u8;
+            let sway = (t * 0.85 + fp * 6.28).sin() * 5.0;
+            out.push(BubbleUp {
+                x: (x0 + sway) as i32,
+                y: yy as i32,
+                r: r.round().max(1.0) as i32,
+                alpha,
+            });
+        }
+        out
+    }
+
     /// 每帧调一次；返回 None 表示数据还没到。
     pub fn snapshot(&mut self, clock: String, t: f64) -> Option<Snapshot> {
         self.drain();
@@ -302,6 +344,7 @@ impl ViewModel {
             services: st.services.iter().map(|s| (s.name.clone(), s.ok)).collect(),
             net: st.net.iter().map(|n| (n.kind.to_string(), n.ipv4.clone())).collect(),
             anim: self.anim(t, bubble.is_some()),
+            bubbles: self.background_bubbles(t),
             bubble,
             tick: self.tick,
             stale_ms: st.age_ms(),

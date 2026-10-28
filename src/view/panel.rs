@@ -19,9 +19,31 @@ struct BubbleLayer {
     cov: Vec<u8>,
 }
 
+/// 读一张海洋背景：等比缩放裁切到满屏，转成 RGB565
+pub fn load_bg(dir: &str) -> Option<Canvas> {
+    let path = format!("{dir}/bg.png");
+    let img = image::open(&path).ok()?.to_rgb8();
+    let (w, h) = (img.width() as f32, img.height() as f32);
+    let scale = (W as f32 / w).max(H as f32 / h);
+    let (nw, nh) = ((w * scale).ceil() as u32, (h * scale).ceil() as u32);
+    let resized = image::imageops::resize(&img, nw.max(W), nh.max(H), image::imageops::FilterType::Triangle);
+    let ox = (resized.width().saturating_sub(W)) / 2;
+    let oy = (resized.height().saturating_sub(H)) / 2;
+    let mut cv = Canvas::new(W, H);
+    for y in 0..H {
+        for x in 0..W {
+            let px = resized.get_pixel(x + ox, y + oy);
+            cv.put(x as i32, y as i32, rgb565(px[0], px[1], px[2]));
+        }
+    }
+    Some(cv)
+}
+
 pub struct Panel<'a> {
     pub fonts: &'a Fonts,
     pub sprites: Option<&'a Sprites>,
+    /// 海洋背景（480x320），没有就用纯色
+    pub bg: Option<Canvas>,
     /// 静态部分（面板）的缓存：只有内容变了才重画
     cache: Option<(String, Canvas)>,
     /// 气泡图层缓存
@@ -29,8 +51,8 @@ pub struct Panel<'a> {
 }
 
 impl<'a> Panel<'a> {
-    pub fn new(fonts: &'a Fonts, sprites: Option<&'a Sprites>) -> Self {
-        Panel { fonts, sprites, cache: None, layer: None }
+    pub fn new(fonts: &'a Fonts, sprites: Option<&'a Sprites>, bg: Option<Canvas>) -> Self {
+        Panel { fonts, sprites, bg, cache: None, layer: None }
     }
 
     fn static_key(s: &Snapshot) -> String {
@@ -67,6 +89,7 @@ impl<'a> Panel<'a> {
         }
         let (_, buf) = self.cache.as_ref().unwrap();
         cv.copy_from(buf);
+        draw_bubbles(cv, &s.bubbles);
         if let Some(sp) = self.sprites {
             let x0 = PANEL_W as i32 + (W as i32 - PANEL_W as i32 - sp.tile_w as i32) / 2;
             let y0 = H as i32 - sp.tile_h as i32 + 14;
@@ -78,7 +101,10 @@ impl<'a> Panel<'a> {
     }
 
     fn draw_static(&self, cv: &mut Canvas, s: &Snapshot) {
-        cv.clear(BG);
+        match &self.bg {
+            Some(bg) => cv.copy_from(bg),
+            None => cv.clear(BG),
+        }
         cv.fill_round_rect(6, 6, PANEL_W as i32 - 12, H as i32 - 12, 10, PANEL);
 
         // 标题 / 副标题 / 时钟：全部按基线对齐
@@ -274,6 +300,34 @@ impl<'a> Panel<'a> {
                     continue;
                 }
                 cv.blend(bx + x, by + y, Rgb565(layer.px[(y * layer.w + x) as usize]), a);
+            }
+        }
+    }
+}
+
+/// 上浮的小气泡：边缘亮、中间透，画在立绘后面才有“在水里”的感觉
+fn draw_bubbles(cv: &mut Canvas, bubbles: &[crate::viewmodel::BubbleUp]) {
+    let shell = rgb565(178, 232, 255);
+    let core = rgb565(96, 176, 232);
+    for b in bubbles {
+        if b.alpha == 0 {
+            continue;
+        }
+        let r = b.r as f32;
+        for dy in -b.r..=b.r {
+            for dx in -b.r..=b.r {
+                let d = ((dx * dx + dy * dy) as f32).sqrt();
+                let cov = (r - d + 0.5).clamp(0.0, 1.0);
+                if cov <= 0.0 {
+                    continue;
+                }
+                // 靠近边沿的地方更亮，整体半透
+                let t = (d / r.max(0.5)).clamp(0.0, 1.0);
+                let c = if t > 0.62 { shell } else { core };
+                let a = (cov * b.alpha as f32 * (0.30 + 0.70 * t * t)) as u8;
+                if a > 0 {
+                    cv.blend(b.x + dx, b.y + dy, c, a);
+                }
             }
         }
     }
