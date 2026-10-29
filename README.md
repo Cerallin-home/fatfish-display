@@ -36,7 +36,7 @@ echo '这是从外面传进来的话' | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/fa
 ```ini
 [Service]
 ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do [ -e /dev/fb0 ] && exit 0; sleep 1; done; exit 1'
-ExecStart=/home/julia/fatfish/display-rs/target/release/fatfish-display fb 0 30
+ExecStart=/home/julia/fatfish/fatfish-display/target/release/fatfish-display fb 0 30
 Restart=on-failure
 ```
 
